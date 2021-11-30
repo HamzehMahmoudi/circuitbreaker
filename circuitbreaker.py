@@ -1,5 +1,5 @@
 import requests
-
+import time
 circuit_config=dict(treshold=3, timeout=3)
 
 class CircuitBreaker:
@@ -12,11 +12,12 @@ class CircuitBreaker:
 
     circuits = []
 
-    def __init__(self, treshold=3, timeout=3):
+    def __init__(self, treshold=3, timeout=3, fallback_func=None):
         self.treshold = treshold
         self.timeout = timeout
         self.state = CircuitBreaker.STATE_CLOSE
         self.fail = 0
+        self.fallback_func = fallback_func
         self.circuits.append(self)
 
     def set_state(self):
@@ -25,28 +26,18 @@ class CircuitBreaker:
         else:
             self.close_circuit()
     
-    def fallback(self , func, *args, **kwargs):
+    def fallback(self , *args, **kwargs):
         """
-        handle error here 
+        return fallback function
         """
-        ex = None
+        return self.fallback_func(*args, **kwargs)
 
-        if self.is_close():
-            for _ in range(self.treshold):
-                try:
-                    print(f"trying to call {func.__name__}")
-                    res = func(*args, **kwargs)
-                    return res
-                except Exception as e:
-                    self.fail += 1
-                    print(self.fail)
-                    ex = e
-                    continue
-            else:
-                self.open_circuit()
-                return {"status": "fail", "message": f"{type(ex).__name__}"}
-        elif self.is_open():
-            return {"status": "fail", "message": "we cant sent your request right now try again"}
+
+    def add_fallback(self, fallback: callable):
+        """
+        add fallback function
+        """
+        self.fallback = fallback
 
     def open_circuit(self):
         self.state = CircuitBreaker.STATE_OPEN
@@ -62,6 +53,12 @@ class CircuitBreaker:
         set state to half open
         """
         self.state = CircuitBreaker.STATE_HALF_OPEN
+    
+    def reset_fail(self):
+        """
+        reset fail
+        """
+        self.fail = 0
 
     def is_open(self):
         """
@@ -86,9 +83,8 @@ class CircuitMonitoring:
     """
     CircuitMonitoring class
     """
-    def __init__(self, circuit_config):
-        self.circuit_config = circuit_config
-        self.circuit_breaker = CircuitBreaker(**circuit_config)
+    def __init__(self, cb):
+        self.circuit_breaker = cb
 
     def monitor(self):
         """
@@ -98,20 +94,35 @@ class CircuitMonitoring:
 
 breaker = CircuitBreaker(**circuit_config)
 
-def circuit(cb=breaker , treshold=3, timeout=3):
+def circuit(cb=breaker):
     def wrapp(func):
-        
         def wrapper(*args, **kwargs):
-            try:
-                return func(*args, **kwargs)
-            except:
-                return cb.fallback(func, *args, **kwargs)
+            ex = None
+            if cb.is_close():
+                for _ in range(cb.treshold):
+                    try:
+                        return func(*args, **kwargs)
+                    except Exception as e:
+                        print(f"trying to call {func.__name__}")
+                        ex = e
+                        cb.fail += 1
+                        print(cb.fail)
+                        continue
+                else:
+                    if cb.fallback_func:
+                        cb.reset_fail()
+                        cb.open_circuit()
+                        return cb.fallback(*args, **kwargs)
+                    else:
+                        cb.reset_fail()
+                        cb.open_circuit()
+                        return {"status": "fail", "message": f"{type(ex).__name__}"}
+            elif cb.is_open():
+                return {"status": "fail", "message": "we cant sent your request right now try again"}
+            elif cb.is_half_open():
+                return {"status": "fail", "message": "we cant sent your request right now try again"}
         return wrapper
     return wrapp
 
 
-@circuit()
-def req():
-    requests.get("http://facebook.com")
 
-print(req())
