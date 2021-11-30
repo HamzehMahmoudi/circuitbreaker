@@ -41,6 +41,20 @@ class CircuitBreaker:
 
     def open_circuit(self):
         self.state = CircuitBreaker.STATE_OPEN
+    
+    def on_open(self, func, *args, **kwargs):
+        """
+        on open function
+        """
+        # these are not final code thes are randome shit that i think will work
+        try:
+            res = func(*args, **kwargs)
+            self.reset_fail()
+            self.close_circuit()
+            return res
+        except:
+            self.half_open_circuit()
+            return {"status": "fail", "message": "we cant sent your request right now try again"}
 
     def close_circuit(self):
         """
@@ -48,11 +62,53 @@ class CircuitBreaker:
         """
         self.state = CircuitBreaker.STATE_CLOSE
 
+    def on_close(self, func, *args, **kwargs):
+        """
+        on close function
+        """
+        # these are not final code thes are randome shit that i think will work
+        ex = None
+        for _ in range(self.treshold):
+            try:
+                res = func(*args, **kwargs)
+                self.reset_fail()
+                return res
+            except Exception as e:
+                print(f"trying to call {func.__name__}")
+                ex = e
+                self.fail += 1
+                print(self.fail)
+                continue
+        else:
+            if self.fallback_func:
+                self.reset_fail()
+                self.open_circuit()
+                return self.fallback(*args, **kwargs)
+            else:
+                self.reset_fail()
+                self.open_circuit()
+                return {"status": "fail", "message": f"{type(ex).__name__}"}
+
+
     def half_open_circuit(self):
         """
         set state to half open
         """
         self.state = CircuitBreaker.STATE_HALF_OPEN
+    
+    def on_half_open(self, func, *args, **kwargs):
+        """
+        on half open function
+        """
+        # these are not final code thes are randome shit that i think will work
+        try:
+            res = func(*args, **kwargs)
+            self.reset_fail()
+            self.close_circuit()
+            return res
+        except Exception as e:
+            self.open_circuit()
+            return {"status": "fail", "message": f"{type(e).__name__}"}
     
     def reset_fail(self):
         """
@@ -97,32 +153,13 @@ breaker = CircuitBreaker(**circuit_config)
 def circuit(cb=breaker):
     def wrapp(func):
         def wrapper(*args, **kwargs):
-            ex = None
             if cb.is_close():
-                for _ in range(cb.treshold):
-                    try:
-                        return func(*args, **kwargs)
-                    except Exception as e:
-                        print(f"trying to call {func.__name__}")
-                        ex = e
-                        cb.fail += 1
-                        print(cb.fail)
-                        continue
-                else:
-                    if cb.fallback_func:
-                        cb.reset_fail()
-                        cb.open_circuit()
-                        return cb.fallback(*args, **kwargs)
-                    else:
-                        cb.reset_fail()
-                        cb.open_circuit()
-                        return {"status": "fail", "message": f"{type(ex).__name__}"}
+                cb.on_close(func, *args, **kwargs)
             elif cb.is_open():
-                return {"status": "fail", "message": "we cant sent your request right now try again"}
+                cb.on_open(func, *args, **kwargs)
             elif cb.is_half_open():
-                return {"status": "fail", "message": "we cant sent your request right now try again"}
+                cb.on_half_open(func, *args, **kwargs)
         return wrapper
     return wrapp
-
 
 
